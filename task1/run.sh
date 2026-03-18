@@ -4,7 +4,7 @@ export TASK_NAME=RTE
 python3 run_glue.py \
   --model_type bert \
   --model_name_or_path bert-base-cased \
-  --task_name RTE \
+  --task_name $TASK_NAME \
   --do_train \
   --do_eval \
   --data_dir $GLUE_DIR/$TASK_NAME \
