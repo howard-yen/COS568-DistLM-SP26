@@ -72,12 +72,6 @@ def set_seed(args):
 def train(args, train_dataset, model, tokenizer):
     """ Train the model """
     if args.local_rank > -1:
-        torch.distributed.init_process_group(
-            backend='gloo', # for cpu
-            init_method=f"tcp://{args.master_ip}:{args.master_port}", # "tcp://{master_ip}:{master_port}"
-            world_size=args.world_size, # Number of nodes (4 in our experiments)
-            rank=args.local_rank, # 0, 1, 2, 3
-        )
         # Task 3: Wrap model with DistributedDataParallel
         if args.distributed_mode == "ddp":
             model = torch.nn.parallel.DistributedDataParallel(model)
@@ -442,6 +436,13 @@ def main():
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
 
     # set up (distributed) training
+    if args.local_rank > -1:
+        torch.distributed.init_process_group(
+            backend='gloo',
+            init_method=f"tcp://{args.master_ip}:{args.master_port}",
+            world_size=args.world_size,
+            rank=args.local_rank,
+        )
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = torch.cuda.device_count()
 
