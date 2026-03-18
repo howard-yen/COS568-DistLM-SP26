@@ -77,9 +77,15 @@ def train(args, train_dataset, model, tokenizer):
             world_size=args.world_size, # Number of nodes (4 in our experiments)
             rank=args.local_rank, # 0, 1, 2, 3
         )
+        # Task 3: Wrap model with DistributedDataParallel
+        if args.distributed_mode == "ddp":
+            model = torch.nn.parallel.DistributedDataParallel(model)
 
     args.train_batch_size = args.per_device_train_batch_size
-    train_sampler = RandomSampler(train_dataset)
+    if args.local_rank > -1:
+        train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size, rank=args.local_rank)
+    else:
+        train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     if args.max_steps > 0:
@@ -161,23 +167,30 @@ def train(args, train_dataset, model, tokenizer):
 
                 if args.local_rank > -1:
                     world_size = args.world_size
-                    for param in model.parameters():
-                        if param.grad is None:
-                            continue
-                        
-                        if args.local_rank == 0:                                                                               
-                            gather_list = [torch.zeros_like(param.grad) for _ in range(world_size)]                            
-                        else:                                                                                                  
-                            gather_list = None                                                                                 
-                        torch.distributed.gather(param.grad, gather_list, dst=0)                                               
-                                                                                                                               
-                        # Rank 0 averages the gradients                                                                        
-                        if args.local_rank == 0:                                                                               
-                            avg_grad = torch.stack(gather_list).mean(dim=0)                                                    
-                            scatter_list = [avg_grad.clone() for _ in range(world_size)]                                       
-                        else:                                                                                                  
-                            scatter_list = None                                                                                
-                        torch.distributed.scatter(param.grad, scatter_list, src=0)                                             
+                    if args.distributed_mode == "scatter_gather":
+                        for param in model.parameters():
+                            if param.grad is None:
+                                continue
+                            
+                            if args.local_rank == 0:                                                                               
+                                gather_list = [torch.zeros_like(param.grad) for _ in range(world_size)]                            
+                            else:                                                                                                  
+                                gather_list = None                                                                                 
+                            torch.distributed.gather(param.grad, gather_list, dst=0)                                               
+                                                                                                                                
+                            # Rank 0 averages the gradients                                                                        
+                            if args.local_rank == 0:                                                                               
+                                avg_grad = torch.stack(gather_list).mean(dim=0)                                                    
+                                scatter_list = [avg_grad.clone() for _ in range(world_size)]                                       
+                            else:                                                                                                  
+                                scatter_list = None                                                                                
+                            torch.distributed.scatter(param.grad, scatter_list, src=0)                                             
+                    elif args.distributed_mode == "all_reduce":
+                        for param in model.parameters():
+                            if param.grad is None:
+                                continue
+                            torch.distributed.all_reduce(param.grad, op=torch.distributed.ReduceOp.SUM)
+                            param.grad /= world_size
 
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -405,6 +418,7 @@ def main():
     parser.add_argument("--master_ip", type=str, default="", help="Master node IP for distributed training.")
     parser.add_argument("--master_port", type=int, default=29500, help="Master node port for distributed training.")
     parser.add_argument("--world_size", type=int, default=1, help="Number of nodes for distributed training.")
+    parser.add_argument("--distributed_mode", type=str, default="scatter_gather", help="Distributed mode: scatter_gather or all_reduce or ddp.")
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
