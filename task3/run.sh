@@ -17,7 +17,7 @@ python3 run_glue.py \
   --per_device_train_batch_size 16 \
   --learning_rate 2e-5 \
   --num_train_epochs 1 \
-  --output_dir ./tmp/$TASK_NAME \
+  --output_dir ./task3/$TASK_NAME \
   --overwrite_output_dir \
   --world_size 4 \
   --local_rank "$LOCAL_RANK" \

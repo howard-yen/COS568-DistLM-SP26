@@ -19,6 +19,7 @@ from __future__ import absolute_import, division, print_function
 
 import argparse
 import glob
+import json
 import logging
 import os
 import random
@@ -121,6 +122,8 @@ def train(args, train_dataset, model, tokenizer):
 
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
+    all_iter_times = []
+    all_losses = []
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
@@ -140,7 +143,6 @@ def train(args, train_dataset, model, tokenizer):
     for train_idx in train_iterator:
         print(f"Training epoch {train_idx}")
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
-        iter_times = []
         for step, batch in enumerate(epoch_iterator):
             start_time = time.time()
             model.train()
@@ -195,6 +197,7 @@ def train(args, train_dataset, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             tr_loss += loss.item()
+            all_losses.append(loss.item())
             if train_idx == 0 and step < 5:
                 print(f"Iteration {step} loss: {loss.item()}")
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -207,7 +210,7 @@ def train(args, train_dataset, model, tokenizer):
                 global_step += 1
 
             end_time = time.time()
-            iter_times.append(end_time - start_time)
+            all_iter_times.append(end_time - start_time)
 
             prof.step()
 
@@ -224,6 +227,20 @@ def train(args, train_dataset, model, tokenizer):
         ##################################################
 
     prof.stop()
+
+    # Save training logs to JSON
+    avg_iter_time_excl_first = sum(all_iter_times[1:]) / (len(all_iter_times) - 1)
+    log_data = {
+        "iter_times": all_iter_times,
+        "avg_time": avg_iter_time_excl_first,
+        "loss_per_step": all_losses,
+    }
+    rank_suffix = f"_rank{args.local_rank}" if args.local_rank > -1 else ""
+    log_path = os.path.join(args.output_dir, f"train_log{rank_suffix}.json")
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(log_path, "w") as f:
+        json.dump(log_data, f, indent=2)
+    logger.info("Saved training log to %s", log_path)
 
     return global_step, tr_loss / global_step
 
